@@ -119,9 +119,18 @@ jobs:
             curl -sS -H "Authorization: Bearer ${RENDER_API_KEY}" "$@"
           }
 
+          # Job logs need repo-admin auth to read via the API, but ::error::
+          # annotations are public. Mirror the diagnosis into one annotation so
+          # it can be read from the commit's checks without downloading logs.
+          annotate() {
+            local encoded
+            encoded=$(printf '%s' "$1" | sed 's/%/%25/g' | sed ':a;N;$!ba;s/\n/%0A/g')
+            echo "::error::${encoded}"
+          }
+
           echo "===== Service configuration ====="
           service=$(api "https://api.render.com/v1/services/${RENDER_SERVICE_ID}")
-          echo "$service" | jq -r '
+          config=$(echo "$service" | jq -r '
             "type:          \(.type // "?")",
             "runtime:       \(.serviceDetails.runtime // .serviceDetails.env // "?")",
             "branch:        \(.branch // "?")",
@@ -130,7 +139,10 @@ jobs:
             "buildCommand:  \(.serviceDetails.envSpecificDetails.buildCommand // "(not set)")",
             "startCommand:  \(.serviceDetails.envSpecificDetails.startCommand // "(not set)")",
             "healthCheck:   \(.serviceDetails.healthCheckPath // "(none)")"
-          ' || echo "could not parse service response: $service"
+          ' 2>/dev/null) || config="could not parse service response: $service"
+          echo "$config"
+          annotate "Render service config:
+          $config"
 
           echo ""
           echo "===== Build log (most recent 100 lines) ====="
@@ -149,8 +161,13 @@ jobs:
             --data-urlencode "limit=100")
 
           # The API returns newest-first; reverse so the log reads top to bottom.
-          echo "$logs" | jq -r '[.logs[]? | "\(.timestamp)  \(.message)"] | reverse | .[]' \
-            || echo "could not parse log response: $logs"
+          build_log=$(echo "$logs" | jq -r '[.logs[]? | "\(.timestamp)  \(.message)"] | reverse | .[]' 2>/dev/null) \
+            || build_log="could not parse log response: $logs"
+          echo "$build_log"
+
+          # Annotations get truncated, so only the tail goes in the annotation.
+          annotate "Render build log (last 30 lines):
+          $(echo "$build_log" | tail -n 30)"
 
           echo ""
           echo "Full logs: https://dashboard.render.com/web/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}"
