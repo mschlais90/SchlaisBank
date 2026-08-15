@@ -16,14 +16,22 @@ const HEIGHT = 230;
 
 const dayNumber = (iso: string) => Date.parse(iso + "T00:00:00Z") / 86_400_000;
 
-/** Clean axis ticks (0 / 50 / 100 …) covering [0, max]. */
+/** Clean axis ticks (0 / 50 / 100 …) spanning [0, max] with the top tick >= max. */
 function niceTicks(max: number, count = 4): number[] {
-  if (max <= 0) return [0, 1];
+  if (!(max > 0)) return [0, 1];
   const rough = max / count;
   const magnitude = 10 ** Math.floor(Math.log10(rough));
   const step = [1, 2, 2.5, 5, 10].map((m) => m * magnitude).find((s) => s >= rough) ?? magnitude * 10;
+
   const ticks: number[] = [];
-  for (let v = 0; v <= max + step * 0.001; v += step) ticks.push(Number(v.toFixed(6)));
+  // Keep stepping until the top tick reaches the max. Stopping at `v <= max`
+  // ended the axis below the peak, which drew the line outside the plot area.
+  for (let v = 0; ticks.length < 64; v += step) {
+    // toPrecision, not toFixed: it clears the float noise from repeated adding
+    // without flattening steps smaller than the fixed decimal place.
+    ticks.push(Number(v.toPrecision(12)));
+    if (v >= max - 1e-9) break;
+  }
   return ticks;
 }
 
