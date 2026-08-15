@@ -12,8 +12,11 @@ concurrency:
   group: render-deploy
   cancel-in-progress: true
 
+# Set as a repository variable (Settings → Secrets and variables → Actions →
+# Variables), not hardcoded, so recreating the Render service doesn't need a
+# code change — just update the variable.
 env:
-  RENDER_SERVICE_ID: srv-da0b28lbedkc73ac2iig
+  RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
 
 jobs:
   deploy:
@@ -25,22 +28,43 @@ jobs:
         env:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
           if [ -z "${RENDER_API_KEY:-}" ]; then
-            echo "::error::RENDER_API_KEY secret is not set. Add it under Settings → Secrets and variables → Actions."
+            echo "::error::RENDER_API_KEY secret is not set. Add it under Settings → Secrets and variables → Actions → Secrets."
+            exit 1
+          fi
+          if [ -z "${RENDER_SERVICE_ID:-}" ]; then
+            echo "::error::RENDER_SERVICE_ID variable is not set. Add it under Settings → Secrets and variables → Actions → Variables (value looks like srv-xxxxxxxxxxxx)."
             exit 1
           fi
 
-          response=$(curl --fail-with-body -sS -X POST \
+          # Keep the body and HTTP code together — an empty body with no status
+          # code told us nothing the last time this failed.
+          response=$(curl -sS -w $'\n%{http_code}' -X POST \
             "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
             -H "Authorization: Bearer ${RENDER_API_KEY}" \
             -H "Content-Type: application/json" \
-            -d "$(jq -nc --arg sha "${GITHUB_SHA}" '{clearCache:"do_not_clear",commitId:$sha}')")
+            -d "$(jq -nc --arg sha "${GITHUB_SHA}" '{clearCache:"do_not_clear",commitId:$sha}')" 2>&1)
+          code=$(echo "$response" | tail -n1)
+          body=$(echo "$response" | sed '$d')
 
-          deploy_id=$(echo "$response" | jq -r '.id // empty')
+          case "$code" in
+            200 | 201 | 202) ;;
+            401 | 403)
+              echo "::error::Render rejected the API key (HTTP $code). Regenerate it and update the RENDER_API_KEY secret. Response: $body"
+              exit 1 ;;
+            404)
+              echo "::error::Render has no service '${RENDER_SERVICE_ID}' (HTTP 404). Check the RENDER_SERVICE_ID variable. Response: $body"
+              exit 1 ;;
+            *)
+              echo "::error::Render returned HTTP $code when starting the deploy. Response: $body"
+              exit 1 ;;
+          esac
+
+          deploy_id=$(echo "$body" | jq -r '.id // empty' 2>/dev/null)
           if [ -z "$deploy_id" ]; then
-            echo "::error::Render did not return a deploy id. Response: $response"
+            echo "::error::Render accepted the request (HTTP $code) but returned no deploy id. Response: $body"
             exit 1
           fi
 

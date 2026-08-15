@@ -46,21 +46,28 @@ npm run dev     # http://localhost:3000
 
 ### 4. Deploy to Render
 
-The app is hosted on Render, service `srv-da0b28lbedkc73ac2iig`, and deploys
-automatically on every push to `main`.
+The app is hosted on Render and deploys automatically on every push to `main`.
 
-**Service settings** (Render dashboard):
+**Create the service as a Node web service** — not Docker. Render builds a Docker
+service from a `Dockerfile`, and this repo doesn't have one, so a Docker service
+fails in about a second with `failed to read dockerfile`. Render can't switch an
+existing service between Docker and a native language; that needs a new service.
 
 | Setting | Value |
 |---|---|
+| Language | **Node** |
+| Branch | `main` |
+| Root directory | *(blank — the app is at the repo root)* |
 | Build command | `npm ci && npm run build` |
 | Start command | `npm start` |
 | Health check path | `/` |
 | Auto-Deploy | **Off** — GitHub Actions triggers deploys instead |
 
-**Environment variables** on the service: `DATABASE_URL` (required), plus optional
-`CRON_SECRET` (any random string, locks down the interest endpoint) and
-`NEXT_PUBLIC_APP_TIMEZONE` if you're not in US Central.
+**Environment variables** on the service: `DATABASE_URL` (required — the app queries
+Postgres on every page load, so without it the site builds fine and then errors at
+request time), `NODE_VERSION` = `22`, plus optional `CRON_SECRET` (any random string,
+locks down the interest endpoint) and `NEXT_PUBLIC_APP_TIMEZONE` if you're not in
+US Central.
 
 **GitHub setup** — under Settings → Secrets and variables → Actions:
 
@@ -68,7 +75,11 @@ automatically on every push to `main`.
 |---|---|---|
 | `RENDER_API_KEY` | Secret | An API key from Render → Account Settings → API Keys |
 | `CRON_SECRET` | Secret | Same value as the service's `CRON_SECRET` |
+| `RENDER_SERVICE_ID` | Variable | The service's ID, `srv-…`, from its dashboard URL |
 | `APP_URL` | Variable | e.g. `https://schlaisbank.onrender.com` |
+
+The service ID is a variable rather than hardcoded, so recreating the Render service
+means updating that one value instead of editing the workflow.
 
 Turning Render's own Auto-Deploy **off** matters: leave it on and every push
 deploys twice, once from Render's GitHub hook and once from the workflow.
