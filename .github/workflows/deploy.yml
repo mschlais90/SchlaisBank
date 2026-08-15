@@ -52,17 +52,42 @@ jobs:
           RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
           DEPLOY_ID: ${{ steps.trigger.outputs.deploy_id }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
 
+          dashboard="https://dashboard.render.com/web/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}"
           status=""
+          consecutive_errors=0
+
           # 30s between polls, up to ~25 minutes. Render's free plan builds are slow.
           for _ in $(seq 1 50); do
             sleep 30
 
-            deploy=$(curl --fail-with-body -sS \
+            # Capture body and HTTP code together so a bad response is reported
+            # rather than silently killing the step.
+            response=$(curl -sS -w $'\n%{http_code}' \
               "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}" \
-              -H "Authorization: Bearer ${RENDER_API_KEY}")
-            status=$(echo "$deploy" | jq -r '.status // "unknown"')
+              -H "Authorization: Bearer ${RENDER_API_KEY}" 2>&1)
+            code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | sed '$d')
+
+            if [ "$code" != "200" ]; then
+              consecutive_errors=$((consecutive_errors + 1))
+              echo "poll failed: HTTP $code — $body"
+              # A blip in Render's API shouldn't fail a deploy that's still running.
+              if [ "$consecutive_errors" -ge 3 ]; then
+                echo "::error::Could not read deploy status (HTTP $code) three times running: $body"
+                echo "::error::Deploy $DEPLOY_ID may still be running — check $dashboard"
+                exit 1
+              fi
+              continue
+            fi
+            consecutive_errors=0
+
+            status=$(echo "$body" | jq -r '.status // empty')
+            if [ -z "$status" ]; then
+              echo "::warning::No status field in response: $body"
+              continue
+            fi
             echo "status: $status"
 
             case "$status" in
@@ -71,11 +96,11 @@ jobs:
                 exit 0
                 ;;
               build_failed | update_failed | pre_deploy_failed | canceled | deactivated)
-                echo "::error::Deploy $DEPLOY_ID ended as '$status'. Check the logs at https://dashboard.render.com/web/${RENDER_SERVICE_ID}"
+                echo "::error::Deploy $DEPLOY_ID ended as '$status'. Build logs: $dashboard"
                 exit 1
                 ;;
             esac
           done
 
-          echo "::error::Gave up waiting; deploy $DEPLOY_ID was still '$status' after 25 minutes."
+          echo "::error::Gave up waiting; deploy $DEPLOY_ID was still '$status' after 25 minutes. See $dashboard"
           exit 1
