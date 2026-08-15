@@ -19,7 +19,15 @@ for (const file of [".env", ".env.local"]) {
 }
 
 if (!process.env.DATABASE_URL) {
-  console.error("DATABASE_URL is not set. Copy .env.example to .env.local and fill it in.");
+  const envLocal = join(root, ".env.local");
+  console.error(
+    existsSync(envLocal)
+      ? `DATABASE_URL is empty in ${envLocal}\n` +
+          "Paste your Neon connection string between the quotes on the DATABASE_URL line, then run this again.\n" +
+          "Neon dashboard -> your project -> Connect -> copy the \"Pooled connection\" string."
+      : `No DATABASE_URL found. Create ${envLocal} with:\n` +
+          '  DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"'
+  );
   process.exit(1);
 }
 

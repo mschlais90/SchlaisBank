@@ -63,8 +63,29 @@ jobs:
           esac
 
           deploy_id=$(echo "$body" | jq -r '.id // empty' 2>/dev/null)
+
+          # Render answers 202 with an empty body when it folds our request into a
+          # deploy that's already running for this commit — which is what happens
+          # while the service's own Auto-Deploy is on. The deploy is real, we just
+          # weren't handed its id, so look it up by commit instead of failing.
           if [ -z "$deploy_id" ]; then
-            echo "::error::Render accepted the request (HTTP $code) but returned no deploy id. Response: $body"
+            echo "Render returned HTTP $code with no deploy id; looking up the deploy for ${GITHUB_SHA::7}."
+            for _ in 1 2 3 4 5; do
+              sleep 5
+              list=$(curl -sS \
+                "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys?limit=20" \
+                -H "Authorization: Bearer ${RENDER_API_KEY}")
+              # List endpoints wrap each item as {"deploy": {...}}; tolerate both shapes.
+              deploy_id=$(echo "$list" | jq -r --arg sha "$GITHUB_SHA" \
+                'if type == "array"
+                 then first(.[] | (.deploy // .) | select(.commit.id? == $sha) | .id) // empty
+                 else empty end' 2>/dev/null)
+              [ -n "$deploy_id" ] && break
+            done
+          fi
+
+          if [ -z "$deploy_id" ]; then
+            echo "::error::Render returned HTTP $code with no deploy id, and no deploy for commit ${GITHUB_SHA} appeared. Response: $body"
             exit 1
           fi
 
