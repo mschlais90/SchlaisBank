@@ -1,0 +1,17 @@
+node_modules/
+.next/
+out/
+build/
+.env
+.env.local
+.env*.local
+*.tsbuildinfo
+next-env.d.ts
+.DS_Store
+.vercel
+
+# Family data stays out of this public repo. Both live in the project folder
+# locally; run `npm run db:generate-seed` to rebuild seed.sql from the workbook.
+BankOfDad.xlsx
+Spec.txt
+db/seed.sql
