@@ -104,3 +104,53 @@ jobs:
 
           echo "::error::Gave up waiting; deploy $DEPLOY_ID was still '$status' after 25 minutes. See $dashboard"
           exit 1
+
+      # When a deploy fails, pull the service config and Render's build log into
+      # this job's output, so debugging doesn't mean a trip to the dashboard.
+      - name: Diagnose the failure
+        if: failure()
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          DEPLOY_ID: ${{ steps.trigger.outputs.deploy_id }}
+        run: |
+          set -uo pipefail
+
+          api() {
+            curl -sS -H "Authorization: Bearer ${RENDER_API_KEY}" "$@"
+          }
+
+          echo "===== Service configuration ====="
+          service=$(api "https://api.render.com/v1/services/${RENDER_SERVICE_ID}")
+          echo "$service" | jq -r '
+            "type:          \(.type // "?")",
+            "runtime:       \(.serviceDetails.runtime // .serviceDetails.env // "?")",
+            "branch:        \(.branch // "?")",
+            "rootDir:       \(if (.rootDir // "") == "" then "(repo root)" else .rootDir end)",
+            "autoDeploy:    \(.autoDeploy // "?")   <- should be \"no\"; \"yes\" means every push deploys twice",
+            "buildCommand:  \(.serviceDetails.envSpecificDetails.buildCommand // "(not set)")",
+            "startCommand:  \(.serviceDetails.envSpecificDetails.startCommand // "(not set)")",
+            "healthCheck:   \(.serviceDetails.healthCheckPath // "(none)")"
+          ' || echo "could not parse service response: $service"
+
+          echo ""
+          echo "===== Build log (most recent 100 lines) ====="
+          owner=$(echo "$service" | jq -r '.ownerId // empty')
+          if [ -z "$owner" ]; then
+            echo "No ownerId on the service response; skipping log fetch."
+            echo "Build logs: https://dashboard.render.com/web/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}"
+            exit 0
+          fi
+
+          logs=$(api -G "https://api.render.com/v1/logs" \
+            --data-urlencode "ownerId=${owner}" \
+            --data-urlencode "resource=${RENDER_SERVICE_ID}" \
+            --data-urlencode "type=build" \
+            --data-urlencode "direction=backward" \
+            --data-urlencode "limit=100")
+
+          # The API returns newest-first; reverse so the log reads top to bottom.
+          echo "$logs" | jq -r '[.logs[]? | "\(.timestamp)  \(.message)"] | reverse | .[]' \
+            || echo "could not parse log response: $logs"
+
+          echo ""
+          echo "Full logs: https://dashboard.render.com/web/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}"
