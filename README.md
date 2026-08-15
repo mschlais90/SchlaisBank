@@ -44,14 +44,42 @@ wipe and reload from scratch.
 npm run dev     # http://localhost:3000
 ```
 
-### 4. Deploy to Vercel
+### 4. Deploy to Render
 
-1. Push this repo to GitHub.
-2. In Vercel, "Add New → Project" and import `mschlais90/SchlaisBank`.
-3. Add the environment variable `DATABASE_URL` (same value as `.env.local`).
-   Optionally add `CRON_SECRET` (any random string) to lock down the cron endpoint,
-   and `NEXT_PUBLIC_APP_TIMEZONE` if you're not in US Central.
-4. Deploy. `vercel.json` registers a monthly cron that posts interest on the 1st.
+The app is hosted on Render, service `srv-da0b28lbedkc73ac2iig`, and deploys
+automatically on every push to `main`.
+
+**Service settings** (Render dashboard):
+
+| Setting | Value |
+|---|---|
+| Build command | `npm ci && npm run build` |
+| Start command | `npm start` |
+| Health check path | `/` |
+| Auto-Deploy | **Off** — GitHub Actions triggers deploys instead |
+
+**Environment variables** on the service: `DATABASE_URL` (required), plus optional
+`CRON_SECRET` (any random string, locks down the interest endpoint) and
+`NEXT_PUBLIC_APP_TIMEZONE` if you're not in US Central.
+
+**GitHub setup** — under Settings → Secrets and variables → Actions:
+
+| Name | Kind | Value |
+|---|---|---|
+| `RENDER_API_KEY` | Secret | An API key from Render → Account Settings → API Keys |
+| `CRON_SECRET` | Secret | Same value as the service's `CRON_SECRET` |
+| `APP_URL` | Variable | e.g. `https://schlaisbank.onrender.com` |
+
+Turning Render's own Auto-Deploy **off** matters: leave it on and every push
+deploys twice, once from Render's GitHub hook and once from the workflow.
+
+### How deploys run
+
+`.github/workflows/deploy.yml` fires on every push to `main`. It asks Render to
+deploy that exact commit, then polls until the deploy is `live` — so a red X on the
+commit means the deploy failed, not just the build. You can also run it by hand from
+the Actions tab, and the same workflow is the rollback path: re-run it on an older
+commit.
 
 ## How interest works
 
@@ -59,7 +87,10 @@ On the 1st of each month, each kid earns **1% of their balance as of the last da
 the previous month**. The posting happens two ways, and they can't double up:
 
 - **On page load.** Opening the app checks every kid for unpaid months and posts them.
-- **Vercel Cron.** `/api/cron/interest` runs at 08:00 UTC on the 1st as a backstop.
+- **A scheduled GitHub Action.** `.github/workflows/monthly-interest.yml` calls
+  `/api/cron/interest` at 08:00 UTC on the 1st as a backstop. (Render's free plan has
+  no cron jobs, and its free services sleep when idle, so the schedule lives in
+  GitHub Actions and the call retries through the cold start.)
 
 If nobody opens the app for a few months, the missed months are filled in one at a
 time in order, so the interest compounds correctly. A unique index on
@@ -83,6 +114,9 @@ back in the spreadsheet days stay skipped — the app never rewrites your histor
 ## Layout
 
 ```
+.github/workflows/
+  deploy.yml             push to main -> Render deploy, waits for it to go live
+  monthly-interest.yml   monthly backstop that calls the interest endpoint
 app/
   page.tsx               all three kids and their balances
   kid/[slug]/page.tsx    one kid: balance, add/subtract form, chart, history

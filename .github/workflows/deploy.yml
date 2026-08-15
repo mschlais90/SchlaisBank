@@ -1,0 +1,81 @@
+name: Deploy to Render
+
+# Every push to main deploys that exact commit to the Render service, then waits
+# for the deploy to finish so a red X here means a broken deploy.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# A newer push supersedes an in-flight watcher; Render itself queues the deploys.
+concurrency:
+  group: render-deploy
+  cancel-in-progress: true
+
+env:
+  RENDER_SERVICE_ID: srv-da0b28lbedkc73ac2iig
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Trigger deploy
+        id: trigger
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${RENDER_API_KEY:-}" ]; then
+            echo "::error::RENDER_API_KEY secret is not set. Add it under Settings → Secrets and variables → Actions."
+            exit 1
+          fi
+
+          response=$(curl --fail-with-body -sS -X POST \
+            "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys" \
+            -H "Authorization: Bearer ${RENDER_API_KEY}" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -nc --arg sha "${GITHUB_SHA}" '{clearCache:"do_not_clear",commitId:$sha}')")
+
+          deploy_id=$(echo "$response" | jq -r '.id // empty')
+          if [ -z "$deploy_id" ]; then
+            echo "::error::Render did not return a deploy id. Response: $response"
+            exit 1
+          fi
+
+          echo "deploy_id=$deploy_id" >> "$GITHUB_OUTPUT"
+          echo "Triggered deploy $deploy_id for commit ${GITHUB_SHA::7}"
+
+      - name: Wait for deploy to go live
+        env:
+          RENDER_API_KEY: ${{ secrets.RENDER_API_KEY }}
+          DEPLOY_ID: ${{ steps.trigger.outputs.deploy_id }}
+        run: |
+          set -euo pipefail
+
+          status=""
+          # 30s between polls, up to ~25 minutes. Render's free plan builds are slow.
+          for _ in $(seq 1 50); do
+            sleep 30
+
+            deploy=$(curl --fail-with-body -sS \
+              "https://api.render.com/v1/services/${RENDER_SERVICE_ID}/deploys/${DEPLOY_ID}" \
+              -H "Authorization: Bearer ${RENDER_API_KEY}")
+            status=$(echo "$deploy" | jq -r '.status // "unknown"')
+            echo "status: $status"
+
+            case "$status" in
+              live)
+                echo "::notice::Deploy $DEPLOY_ID is live."
+                exit 0
+                ;;
+              build_failed | update_failed | pre_deploy_failed | canceled | deactivated)
+                echo "::error::Deploy $DEPLOY_ID ended as '$status'. Check the logs at https://dashboard.render.com/web/${RENDER_SERVICE_ID}"
+                exit 1
+                ;;
+            esac
+          done
+
+          echo "::error::Gave up waiting; deploy $DEPLOY_ID was still '$status' after 25 minutes."
+          exit 1
