@@ -12,11 +12,11 @@ concurrency:
   group: render-deploy
   cancel-in-progress: true
 
-# Set as a repository variable (Settings → Secrets and variables → Actions →
-# Variables), not hardcoded, so recreating the Render service doesn't need a
-# code change — just update the variable.
+# Defaults to the current service, but a RENDER_SERVICE_ID repository variable
+# (Settings → Secrets and variables → Actions → Variables) overrides it, so
+# recreating the service doesn't have to mean editing this file.
 env:
-  RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID }}
+  RENDER_SERVICE_ID: ${{ vars.RENDER_SERVICE_ID || 'srv-da0br0ugekts739i87lg' }}
 
 jobs:
   deploy:
